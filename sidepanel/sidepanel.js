@@ -57,6 +57,7 @@ const btnSaveSettings = document.getElementById('btn-save-settings');
 const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
 const btnContributionMode = document.getElementById('btn-contribution-mode');
+const contributionUpdateLayer = document.getElementById('contribution-update-layer');
 const contributionUpdateHint = document.getElementById('contribution-update-hint');
 const contributionUpdateHintText = document.getElementById('contribution-update-hint-text');
 const btnDismissContributionUpdateHint = document.getElementById('btn-dismiss-contribution-update-hint');
@@ -2220,9 +2221,40 @@ function getContributionUpdateHintMessage(snapshot = currentContributionContentS
   return '公告 / 使用教程有更新了，可点上方“贡献/使用”查看。';
 }
 
+function positionContributionUpdateHint() {
+  if (!contributionUpdateLayer || !contributionUpdateHint || !btnContributionMode) {
+    return;
+  }
+  if (contributionUpdateLayer.hidden || contributionUpdateHint.hidden) {
+    return;
+  }
+
+  const buttonRect = btnContributionMode.getBoundingClientRect();
+  const viewportWidth = Math.max(document.documentElement?.clientWidth || 0, window.innerWidth || 0);
+  const viewportHeight = Math.max(document.documentElement?.clientHeight || 0, window.innerHeight || 0);
+  const hintWidth = contributionUpdateHint.offsetWidth || 220;
+  const hintHeight = contributionUpdateHint.offsetHeight || 56;
+  const viewportPadding = 12;
+  const gap = 10;
+
+  const maxLeft = Math.max(viewportPadding, viewportWidth - hintWidth - viewportPadding);
+  const left = Math.min(Math.max(viewportPadding, Math.round(buttonRect.left)), maxLeft);
+  const shouldPlaceAbove = (buttonRect.bottom + gap + hintHeight) > (viewportHeight - viewportPadding)
+    && buttonRect.top > (hintHeight + gap + viewportPadding);
+  const top = shouldPlaceAbove
+    ? Math.max(viewportPadding, Math.round(buttonRect.top - hintHeight - gap))
+    : Math.max(viewportPadding, Math.round(buttonRect.bottom + gap));
+  const buttonCenter = Math.round(buttonRect.left + (buttonRect.width / 2));
+  const arrowOffset = Math.min(Math.max(16, buttonCenter - left), Math.max(16, hintWidth - 16));
+
+  contributionUpdateHint.style.left = `${left}px`;
+  contributionUpdateHint.style.top = `${top}px`;
+  contributionUpdateHint.style.setProperty('--contribution-update-arrow-left', `${arrowOffset}px`);
+}
+
 function shouldShowContributionUpdateHint(snapshot = currentContributionContentSnapshot) {
   const promptVersion = String(snapshot?.promptVersion || '').trim();
-  if (!contributionUpdateHint || !contributionUpdateHintText || !btnContributionMode) {
+  if (!contributionUpdateLayer || !contributionUpdateHint || !contributionUpdateHintText || !btnContributionMode) {
     return false;
   }
   if (!promptVersion) {
@@ -2238,17 +2270,23 @@ function shouldShowContributionUpdateHint(snapshot = currentContributionContentS
 }
 
 function renderContributionUpdateHint(snapshot = currentContributionContentSnapshot) {
-  if (!contributionUpdateHint) {
+  if (!contributionUpdateLayer || !contributionUpdateHint) {
     return;
   }
 
   const visible = shouldShowContributionUpdateHint(snapshot);
+  contributionUpdateLayer.hidden = !visible;
   contributionUpdateHint.hidden = !visible;
   if (!visible || !contributionUpdateHintText) {
     return;
   }
 
   contributionUpdateHintText.textContent = getContributionUpdateHintMessage(snapshot);
+  if (typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => positionContributionUpdateHint());
+    return;
+  }
+  positionContributionUpdateHint();
 }
 
 function dismissContributionUpdateHint() {
@@ -4691,6 +4729,14 @@ document.addEventListener('keydown', (event) => {
     closeConfigMenu();
   }
 });
+
+window.addEventListener('resize', () => {
+  positionContributionUpdateHint();
+});
+
+document.addEventListener('scroll', () => {
+  positionContributionUpdateHint();
+}, true);
 
 // ============================================================
 // Init

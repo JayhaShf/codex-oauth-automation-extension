@@ -34,17 +34,8 @@
     </div>
     <div class="header-btns">
       <div class="run-group">
-        <div class="contribution-entry">
-          <button id="btn-contribution-mode" class="btn btn-outline btn-sm btn-contribution-mode" type="button"
-            aria-pressed="false" title="进入贡献模式并打开上传页">贡献/使用</button>
-          <div id="contribution-update-hint" class="contribution-update-hint" aria-live="polite" hidden>
-            <p id="contribution-update-hint-text" class="contribution-update-hint-text">
-              公告 / 使用教程有更新了，可点上方“贡献/使用”查看。
-            </p>
-            <button id="btn-dismiss-contribution-update-hint" class="contribution-update-hint-close" type="button"
-              aria-label="关闭更新提示" title="关闭更新提示">×</button>
-          </div>
-        </div>
+        <button id="btn-contribution-mode" class="btn btn-outline btn-sm btn-contribution-mode" type="button"
+          aria-pressed="false" title="进入贡献模式并打开上传页">贡献/使用</button>
         <input type="number" id="input-run-count" class="run-count-input" value="1" min="1" max="50" title="运行次数" />
         <button id="btn-auto-run" class="btn btn-success" title="自动执行全部步骤">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -89,6 +80,16 @@
       </div>
     </div>
   </header>
+
+  <div id="contribution-update-layer" class="contribution-update-layer" hidden>
+    <div id="contribution-update-hint" class="contribution-update-hint" aria-live="polite" hidden>
+      <p id="contribution-update-hint-text" class="contribution-update-hint-text">
+        公告 / 使用教程有更新了，可点上方“贡献/使用”查看。
+      </p>
+      <button id="btn-dismiss-contribution-update-hint" class="contribution-update-hint-close" type="button"
+        aria-label="关闭更新提示" title="关闭更新提示">×</button>
+    </div>
+  </div>
 
   <section id="update-section" hidden>
     <div class="update-card">
