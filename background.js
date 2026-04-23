@@ -292,6 +292,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   mail2925Accounts: [],
   heroSmsApiKey: '',
   heroSmsMaxPrice: null,
+  heroSmsCodeDelaySeconds: 0,
   heroSmsCountryId: HERO_SMS_COUNTRY_ID,
   heroSmsCountryLabel: HERO_SMS_COUNTRY_LABEL,
 };
@@ -353,6 +354,7 @@ const DEFAULT_STATE = {
   currentLuckmailMailCursor: null,
   currentPhoneActivation: null,
   reusablePhoneActivation: null,
+  heroSmsBalance: null,
   autoRunning: false, // 当前是否处于自动运行中。
   autoRunPhase: 'idle', // 当前自动运行阶段。
   autoRunCurrentRun: 0, // 自动运行当前执行到第几轮。
@@ -950,6 +952,12 @@ function normalizePersistentSettingValue(key, value) {
     case 'heroSmsMaxPrice': {
       const numeric = Number(value);
       return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+    }
+    case 'heroSmsCodeDelaySeconds': {
+      const numeric = Number(value);
+      return Number.isFinite(numeric)
+        ? Math.max(0, Math.min(300, Math.floor(numeric)))
+        : 0;
     }
     case 'heroSmsCountryId':
       return Math.max(1, Math.floor(Number(value) || HERO_SMS_COUNTRY_ID));

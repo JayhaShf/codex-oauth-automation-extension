@@ -527,6 +527,11 @@
           return { ok: true, state: await getState() };
         }
 
+        case 'QUERY_HERO_SMS_BALANCE': {
+          const balance = await phoneVerificationHelpers.queryHeroSmsBalance(await getState());
+          return { ok: true, balance };
+        }
+
         case 'EXPORT_SETTINGS': {
           return { ok: true, ...(await exportSettingsBundle()) };
         }

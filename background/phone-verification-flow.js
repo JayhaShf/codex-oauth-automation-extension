@@ -27,7 +27,9 @@
     const DEFAULT_PHONE_REQUEST_TIMEOUT_MS = 20000;
     const DEFAULT_PHONE_SUBMIT_ATTEMPTS = 3;
     const DEFAULT_PHONE_CODE_WAIT_WINDOW_MS = 60000;
+    const DEFAULT_PHONE_CODE_DELAY_SECONDS = 0;
     const DEFAULT_PHONE_NUMBER_MAX_USES = 3;
+    const DEFAULT_COUNTRY_SMS_FAILURE_LIMIT = 3;
     const PHONE_CODE_TIMEOUT_ERROR_PREFIX = 'PHONE_CODE_TIMEOUT::';
     const PHONE_RESTART_STEP7_ERROR_PREFIX = 'PHONE_RESTART_STEP7::';
 
@@ -54,6 +56,13 @@
     function normalizeMaxPrice(value) {
       const numeric = Number(value);
       return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+    }
+
+    function normalizeCodeDelaySeconds(value) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric)
+        ? Math.max(0, Math.min(300, Math.floor(numeric)))
+        : DEFAULT_PHONE_CODE_DELAY_SECONDS;
     }
 
     function resolveCountryConfig(state = {}) {
@@ -195,6 +204,21 @@
       );
     }
 
+    function parseHeroSmsBalance(payload) {
+      const text = describeHeroSmsPayload(payload);
+      const accessMatch = text.match(/^ACCESS_BALANCE:([0-9.]+)$/i);
+      if (accessMatch) {
+        const numeric = Number(accessMatch[1]);
+        return Number.isFinite(numeric) ? numeric : null;
+      }
+      if (payload && typeof payload === 'object') {
+        const numeric = Number(payload.balance ?? payload.value ?? payload.amount);
+        return Number.isFinite(numeric) ? numeric : null;
+      }
+      const numeric = Number(text);
+      return Number.isFinite(numeric) ? numeric : null;
+    }
+
     function resolveHeroSmsCountryRegion(label = '') {
       const normalizedLabel = String(label || '').trim().toLowerCase();
       if (!normalizedLabel) {
@@ -262,12 +286,26 @@
       return '';
     }
 
+    function isHeroSmsNoStockText(value = '') {
+      const normalizedValue = String(value || '').trim();
+      if (!normalizedValue) {
+        return false;
+      }
+      return [
+        /NO_NUMBERS/i,
+        /no\s+numbers?/i,
+        /no\s+activations?/i,
+        /out\s+of\s+stock/i,
+        /not\s+available/i,
+      ].some((pattern) => pattern.test(normalizedValue));
+    }
+
     function isHeroSmsNoNumbersPayload(payload) {
-      return /NO_NUMBERS/i.test(describeHeroSmsPayload(payload));
+      return isHeroSmsNoStockText(describeHeroSmsPayload(payload));
     }
 
     function isHeroSmsNoNumbersError(error) {
-      return /NO_NUMBERS/i.test(String(error?.message || ''));
+      return Boolean(error?.heroSmsNoStock) || isHeroSmsNoStockText(error?.message || '');
     }
 
     function buildHeroSmsUrl(baseUrl, query = {}) {
@@ -375,6 +413,17 @@
       return extractHeroSmsCountryLabels(payload);
     }
 
+    async function queryHeroSmsBalance(state = {}) {
+      const config = resolvePhoneConfig(state);
+      const payload = await fetchHeroSmsPayload(config, {
+        action: 'getBalance',
+      }, 'HeroSMS getBalance');
+      const balance = parseHeroSmsBalance(payload);
+      await setState({ heroSmsBalance: balance });
+      broadcastDataUpdate({ heroSmsBalance: balance });
+      return balance;
+    }
+
     async function persistSelectedCountry(countryConfig) {
       const payload = {
         heroSmsCountryId: countryConfig.id,
@@ -384,24 +433,33 @@
       broadcastDataUpdate(payload);
     }
 
-    async function pickAlternativeCountry(state = {}, excludedCountryIds = []) {
+    async function collectPurchasableCountries(state = {}) {
       const config = resolvePhoneConfig(state);
       const maxPrice = normalizeMaxPrice(state.heroSmsMaxPrice);
-      const excluded = new Set(excludedCountryIds.map((value) => Math.max(1, Math.floor(Number(value) || 0))));
       const [countryPrices, countryLabels] = await Promise.all([
         fetchHeroSmsCountryPrices(config),
         fetchHeroSmsCountryLabels(config).catch(() => new Map()),
       ]);
-      const currentRegion = resolveHeroSmsCountryRegion(state.heroSmsCountryLabel);
-
       return Array.from(countryPrices.entries())
-        .filter(([countryId, price]) => !excluded.has(countryId) && (maxPrice === null || price <= maxPrice))
+        .filter(([, price]) => maxPrice === null || price <= maxPrice)
         .map(([countryId, price]) => ({
           id: countryId,
           label: countryLabels.get(countryId) || `Country ${countryId}`,
           price,
           region: resolveHeroSmsCountryRegion(countryLabels.get(countryId) || `Country ${countryId}`),
-        }))
+        }));
+    }
+
+    function pickBestHeroSmsCountry(state = {}, candidates = [], excludedCountryIds = []) {
+      const excluded = new Set(excludedCountryIds.map((value) => Math.max(1, Math.floor(Number(value) || 0))));
+      const currentCountryId = Math.max(1, Math.floor(Number(state.heroSmsCountryId) || 0));
+      const currentRegion = resolveHeroSmsCountryRegion(state.heroSmsCountryLabel);
+      const filteredCandidates = candidates.filter((candidate) => !excluded.has(candidate.id));
+      const currentCandidate = filteredCandidates.find((candidate) => candidate.id === currentCountryId);
+      if (currentCandidate) {
+        return currentCandidate;
+      }
+      return filteredCandidates
         .sort((left, right) => {
           const sameRegionLeft = currentRegion && left.region === currentRegion ? 1 : 0;
           const sameRegionRight = currentRegion && right.region === currentRegion ? 1 : 0;
@@ -410,6 +468,100 @@
           }
           return left.price - right.price || left.id - right.id;
         })[0] || null;
+    }
+
+    async function ensureHeroSmsPurchaseReady(state = {}, options = {}) {
+      const {
+        excludedCountryIds = [],
+        logSelection = false,
+        selectionReason = '自动筛选可买国家',
+        allowFallbackCurrent = true,
+        allowBalanceCheckFailure = true,
+      } = options;
+      let candidates = [];
+      try {
+        candidates = await collectPurchasableCountries(state);
+      } catch (error) {
+        if (!allowFallbackCurrent) {
+          throw error;
+        }
+      }
+
+      let selectedCountry = candidates.length > 0
+        ? pickBestHeroSmsCountry(state, candidates, excludedCountryIds)
+        : null;
+      if (!selectedCountry && allowFallbackCurrent) {
+        const currentCountry = resolveCountryConfig(state);
+        const excluded = new Set(excludedCountryIds.map((value) => Math.max(1, Math.floor(Number(value) || 0))));
+        if (!excluded.has(currentCountry.id)) {
+          selectedCountry = {
+            id: currentCountry.id,
+            label: currentCountry.label,
+            price: null,
+            region: resolveHeroSmsCountryRegion(currentCountry.label),
+          };
+        }
+      }
+      if (!selectedCountry) {
+        throw new Error('HeroSMS 当前没有符合价格阈值且可购买的国家。');
+      }
+
+      if (
+        resolveCountryConfig(state).id !== selectedCountry.id
+        || resolveCountryConfig(state).label !== selectedCountry.label
+      ) {
+        if (logSelection) {
+          const priceText = Number.isFinite(selectedCountry.price)
+            ? `$${selectedCountry.price.toFixed(4)}`
+            : '价格未知';
+          await addLog(
+            `Step 9: ${selectionReason}，切换到 ${selectedCountry.label}，当前${priceText}。`,
+            'info'
+          );
+        }
+        await persistSelectedCountry(selectedCountry);
+      }
+
+      let balance = (state.heroSmsBalance === null || state.heroSmsBalance === undefined)
+        ? null
+        : Number(state.heroSmsBalance);
+      if (!Number.isFinite(balance)) {
+        balance = null;
+      }
+      try {
+        balance = await queryHeroSmsBalance({
+          ...state,
+          heroSmsCountryId: selectedCountry.id,
+          heroSmsCountryLabel: selectedCountry.label,
+        });
+      } catch (error) {
+        if (!allowBalanceCheckFailure) {
+          throw error;
+        }
+        await addLog(`Step 9: failed to query HeroSMS balance before purchase. ${error.message}`, 'warn');
+      }
+      if (Number.isFinite(balance) && Number.isFinite(selectedCountry.price) && balance < selectedCountry.price) {
+        throw new Error(
+          `HeroSMS 余额不足。当前余额 $${balance.toFixed(4)}，${selectedCountry.label} 购买价格 $${selectedCountry.price.toFixed(4)}。`
+        );
+      }
+
+      return {
+        state: {
+          ...state,
+          heroSmsCountryId: selectedCountry.id,
+          heroSmsCountryLabel: selectedCountry.label,
+          heroSmsBalance: balance,
+        },
+        country: selectedCountry,
+        candidates,
+        balance,
+      };
+    }
+
+    async function pickAlternativeCountry(state = {}, excludedCountryIds = []) {
+      const candidates = await collectPurchasableCountries(state);
+      return pickBestHeroSmsCountry(state, candidates, excludedCountryIds);
     }
 
     function parseActivationPayload(payload, fallback = null) {
@@ -457,9 +609,13 @@
       });
       if (!activation) {
         const text = describeHeroSmsPayload(payload);
-        throw new Error(
+        const error = new Error(
           `HeroSMS getNumber failed for ${countryConfig.label} (${countryConfig.id}): ${text || 'empty response'}`
         );
+        if (isHeroSmsNoNumbersPayload(payload)) {
+          error.heroSmsNoStock = true;
+        }
+        throw error;
       }
 
       return activation;
@@ -467,6 +623,16 @@
 
     async function requestPhoneActivation(state = {}) {
       let currentState = { ...state };
+      if (!currentState.heroSmsPurchasePrepared) {
+        const initialSelection = await ensureHeroSmsPurchaseReady(currentState, {
+          logSelection: true,
+          selectionReason: '首次购买前自动筛选可买国家',
+        });
+        currentState = {
+          ...initialSelection.state,
+          heroSmsPurchasePrepared: true,
+        };
+      }
       let countryConfig = resolveCountryConfig(currentState);
       const attemptedCountryIds = new Set();
 
@@ -479,22 +645,19 @@
             throw error;
           }
 
-          const nextCountry = await pickAlternativeCountry(currentState, Array.from(attemptedCountryIds));
-          if (!nextCountry) {
+          const nextSelection = await ensureHeroSmsPurchaseReady(currentState, {
+            excludedCountryIds: Array.from(attemptedCountryIds),
+            logSelection: true,
+            selectionReason: `${countryConfig.label} 暂无号码池，自动切换可买国家`,
+          }).catch(() => null);
+          if (!nextSelection) {
             throw error;
           }
-
-          await addLog(
-            `Step 9: ${countryConfig.label} -> ${nextCountry.label}，自动切换购买，当前价格 $${nextCountry.price.toFixed(4)}。`,
-            'warn'
-          );
-          await persistSelectedCountry(nextCountry);
           currentState = {
-            ...currentState,
-            heroSmsCountryId: nextCountry.id,
-            heroSmsCountryLabel: nextCountry.label,
+            ...nextSelection.state,
+            heroSmsPurchasePrepared: true,
           };
-          countryConfig = nextCountry;
+          countryConfig = nextSelection.country;
         }
       }
     }
@@ -748,7 +911,8 @@
     }
 
     async function acquirePhoneActivation(state = {}) {
-      const countryConfig = resolveCountryConfig(state);
+      let currentState = { ...state };
+      const countryConfig = resolveCountryConfig(currentState);
       const reusableActivation = normalizeActivation(state[REUSABLE_PHONE_ACTIVATION_STATE_KEY]);
       if (
         reusableActivation
@@ -756,7 +920,7 @@
         && reusableActivation.successfulUses < reusableActivation.maxUses
       ) {
         try {
-          const reactivated = await reactivatePhoneActivation(state, reusableActivation);
+          const reactivated = await reactivatePhoneActivation(currentState, reusableActivation);
           await addLog(
             `Step 9: reusing ${countryConfig.label} number ${reactivated.phoneNumber} (${reactivated.successfulUses + 1}/${reactivated.maxUses}).`,
             'info'
@@ -770,9 +934,14 @@
         await clearReusableActivation();
       }
 
-      const activation = await requestPhoneActivation(state);
+      const readySelection = await ensureHeroSmsPurchaseReady(currentState);
+      currentState = {
+        ...readySelection.state,
+        heroSmsPurchasePrepared: true,
+      };
+      const activation = await requestPhoneActivation(currentState);
       await addLog(
-        `Step 9: acquired ${HERO_SMS_SERVICE_LABEL} / ${countryConfig.label} number ${activation.phoneNumber}.`,
+        `Step 9: acquired ${HERO_SMS_SERVICE_LABEL} / ${resolveCountryConfig(currentState).label} number ${activation.phoneNumber}.`,
         'info'
       );
       return activation;
@@ -797,10 +966,16 @@
       });
     }
 
-    async function waitForPhoneCodeOrRotateNumber(tabId, state, activation) {
+    async function waitForPhoneCodeOrRotateNumber(tabId, state, activation, runtime = {}) {
       const normalizedActivation = normalizeActivation(activation);
       if (!normalizedActivation) {
         throw new Error('Phone activation is missing.');
+      }
+
+      const codeDelaySeconds = normalizeCodeDelaySeconds(state.heroSmsCodeDelaySeconds);
+      if (codeDelaySeconds > 0) {
+        await addLog(`Step 9: delaying SMS polling for ${codeDelaySeconds} seconds before checking ${normalizedActivation.phoneNumber}.`, 'info');
+        await sleepWithStop(codeDelaySeconds * 1000);
       }
 
       let lastLoggedStatus = '';
@@ -862,7 +1037,30 @@
             `Step 9: still no SMS for ${normalizedActivation.phoneNumber} 60 seconds after resend, restarting from step 7 with a new number.`,
             'warn'
           );
-          throw buildPhoneRestartStep7Error(normalizedActivation.phoneNumber);
+          const nextFailureCount = (runtime.countrySmsFailureCounts?.get(normalizedActivation.countryId) || 0) + 1;
+          runtime.countrySmsFailureCounts?.set(normalizedActivation.countryId, nextFailureCount);
+          const shouldRotateCountry = nextFailureCount >= DEFAULT_COUNTRY_SMS_FAILURE_LIMIT;
+          if (shouldRotateCountry) {
+            const nextSelection = await ensureHeroSmsPurchaseReady(state, {
+              excludedCountryIds: [normalizedActivation.countryId],
+              logSelection: false,
+            }).catch(() => null);
+            if (nextSelection?.country) {
+              await addLog(
+                `Step 9: ${resolveCountryConfig(state).label} 已连续 ${DEFAULT_COUNTRY_SMS_FAILURE_LIMIT} 次收不到验证码，切换到 ${nextSelection.country.label}，当前价格 $${nextSelection.country.price.toFixed(4)}。`,
+                'warn'
+              );
+              return {
+                code: '',
+                replaceNumber: true,
+                nextCountry: nextSelection.country,
+              };
+            }
+          }
+          return {
+            code: '',
+            replaceNumber: true,
+          };
         }
       }
 
@@ -875,6 +1073,9 @@
       let pageState = initialPageState || await readPhonePageState(tabId);
       let shouldCancelActivation = false;
       let remainingResendRequests = Math.max(0, Number(state.verificationResendCount) || 0);
+      const runtime = {
+        countrySmsFailureCounts: new Map(),
+      };
 
       try {
         while (true) {
@@ -921,9 +1122,16 @@
           for (let attempt = 1; attempt <= DEFAULT_PHONE_SUBMIT_ATTEMPTS; attempt += 1) {
             throwIfStopped();
 
-            const codeResult = await waitForPhoneCodeOrRotateNumber(tabId, state, activation);
+            const codeResult = await waitForPhoneCodeOrRotateNumber(tabId, state, activation, runtime);
             if (codeResult.replaceNumber) {
               shouldReplaceNumber = true;
+              if (codeResult.nextCountry) {
+                state = {
+                  ...state,
+                  heroSmsCountryId: codeResult.nextCountry.id,
+                  heroSmsCountryLabel: codeResult.nextCountry.label,
+                };
+              }
               break;
             }
 
@@ -975,6 +1183,7 @@
             }
 
             await completePhoneActivation(state, activation);
+            runtime.countrySmsFailureCounts.delete(activation.countryId);
             await markActivationReusableAfterSuccess(activation);
             shouldCancelActivation = false;
             await clearCurrentActivation();
@@ -984,6 +1193,16 @@
 
           if (!shouldReplaceNumber) {
             throw new Error('Phone verification did not complete successfully.');
+          }
+
+          if (!pageState?.addPhonePage) {
+            const returnResult = await returnToAddPhone(tabId);
+            pageState = {
+              ...pageState,
+              ...returnResult,
+              addPhonePage: true,
+              phoneVerificationPage: false,
+            };
           }
         }
       } catch (error) {
@@ -999,6 +1218,7 @@
       completePhoneVerificationFlow,
       normalizeActivation,
       pollPhoneActivationCode,
+      queryHeroSmsBalance,
       reactivatePhoneActivation,
       requestPhoneActivation,
     };

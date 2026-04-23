@@ -392,11 +392,26 @@
         <input type="password" id="input-hero-sms-api-key" class="data-input mono" placeholder="请输入 HeroSMS API Key" />
       </div>
       <div class="data-row">
+        <span class="data-label">余额查询</span>
+        <div class="data-inline data-value-actions">
+          <span id="display-hero-sms-balance" class="data-value data-value-fill mono">待查询</span>
+          <button id="btn-query-hero-sms-balance" class="btn btn-outline btn-sm data-inline-btn" type="button">查询</button>
+        </div>
+      </div>
+      <div class="data-row">
         <span class="data-label">价格阈值</span>
         <div class="setting-controls">
           <input type="number" id="input-hero-sms-max-price" class="data-input auto-delay-input mono" min="0" step="0.0001"
             placeholder="留空不限" title="仅显示价格不高于该阈值的 HeroSMS 国家" />
           <span class="data-unit">USD</span>
+        </div>
+      </div>
+      <div class="data-row">
+        <span class="data-label">收码延迟</span>
+        <div class="setting-controls">
+          <input type="number" id="input-hero-sms-code-delay-seconds" class="data-input auto-delay-input mono" min="0" max="300" step="1"
+            placeholder="0" title="提交号码后延迟多久再开始轮询验证码" />
+          <span class="data-unit">秒</span>
         </div>
       </div>
       <div class="data-row">

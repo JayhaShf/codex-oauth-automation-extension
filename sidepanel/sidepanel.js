@@ -210,7 +210,10 @@ const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay
 const inputVerificationResendCount = document.getElementById('input-verification-resend-count');
 const rowAccountRunHistoryTextEnabled = document.getElementById('row-account-run-history-text-enabled');
 const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
+const btnQueryHeroSmsBalance = document.getElementById('btn-query-hero-sms-balance');
+const displayHeroSmsBalance = document.getElementById('display-hero-sms-balance');
 const inputHeroSmsMaxPrice = document.getElementById('input-hero-sms-max-price');
+const inputHeroSmsCodeDelaySeconds = document.getElementById('input-hero-sms-code-delay-seconds');
 const selectHeroSmsCountry = document.getElementById('select-hero-sms-country');
 const displayHeroSmsPlatform = document.getElementById('display-hero-sms-platform');
 const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
@@ -1540,6 +1543,7 @@ function collectSettingsPayload() {
     ),
     heroSmsApiKey: heroSmsApiKeyValue,
     heroSmsMaxPrice: heroSmsMaxPriceValue,
+    heroSmsCodeDelaySeconds: normalizeHeroSmsCodeDelaySeconds(inputHeroSmsCodeDelaySeconds?.value),
     heroSmsCountryId: heroSmsCountry.id,
     heroSmsCountryLabel: heroSmsCountry.label,
   };
@@ -1609,6 +1613,20 @@ function normalizeHeroSmsMaxPrice(value) {
   }
   const numeric = Number(trimmed);
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function normalizeHeroSmsCodeDelaySeconds(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric)
+    ? Math.max(0, Math.min(300, Math.floor(numeric)))
+    : 0;
+}
+
+function formatHeroSmsBalanceValue(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric)
+    ? `$${numeric.toFixed(4)}`
+    : '待查询';
 }
 
 function parseHeroSmsPayload(text = '') {
@@ -2175,6 +2193,13 @@ function applySettingsState(state) {
     inputHeroSmsMaxPrice.value = state?.heroSmsMaxPrice !== undefined && state?.heroSmsMaxPrice !== null
       ? String(normalizeHeroSmsMaxPrice(state.heroSmsMaxPrice) ?? '')
       : '';
+  }
+  if (inputHeroSmsCodeDelaySeconds) {
+    inputHeroSmsCodeDelaySeconds.value = String(normalizeHeroSmsCodeDelaySeconds(state?.heroSmsCodeDelaySeconds));
+  }
+  if (displayHeroSmsBalance) {
+    displayHeroSmsBalance.textContent = formatHeroSmsBalanceValue(state?.heroSmsBalance);
+    displayHeroSmsBalance.classList.toggle('has-value', Number.isFinite(Number(state?.heroSmsBalance)));
   }
   if (selectHeroSmsCountry) {
     const restoredCountryId = String(normalizeHeroSmsCountryId(state?.heroSmsCountryId));
@@ -4726,6 +4751,37 @@ inputHeroSmsMaxPrice?.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputHeroSmsCodeDelaySeconds?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsCodeDelaySeconds?.addEventListener('blur', () => {
+  inputHeroSmsCodeDelaySeconds.value = String(normalizeHeroSmsCodeDelaySeconds(inputHeroSmsCodeDelaySeconds.value));
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+btnQueryHeroSmsBalance?.addEventListener('click', async () => {
+  btnQueryHeroSmsBalance.disabled = true;
+  const previousText = btnQueryHeroSmsBalance.textContent;
+  btnQueryHeroSmsBalance.textContent = '查询中';
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'QUERY_HERO_SMS_BALANCE', source: 'sidepanel' });
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    if (displayHeroSmsBalance) {
+      displayHeroSmsBalance.textContent = formatHeroSmsBalanceValue(response?.balance);
+      displayHeroSmsBalance.classList.toggle('has-value', Number.isFinite(Number(response?.balance)));
+    }
+    showToast(`HeroSMS 余额：${formatHeroSmsBalanceValue(response?.balance)}`, 'success', 1800);
+  } catch (error) {
+    showToast(`查询 HeroSMS 余额失败：${error.message}`, 'error');
+  } finally {
+    btnQueryHeroSmsBalance.disabled = false;
+    btnQueryHeroSmsBalance.textContent = previousText;
+  }
+});
+
 selectHeroSmsCountry?.addEventListener('change', () => {
   updateHeroSmsPlatformDisplay(getSelectedHeroSmsCountryOption().label);
   markSettingsDirty(true);
@@ -4978,6 +5034,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.heroSmsMaxPrice !== undefined && inputHeroSmsMaxPrice) {
         inputHeroSmsMaxPrice.value = message.payload.heroSmsMaxPrice !== null ? String(message.payload.heroSmsMaxPrice) : '';
+      }
+      if (message.payload.heroSmsCodeDelaySeconds !== undefined && inputHeroSmsCodeDelaySeconds) {
+        inputHeroSmsCodeDelaySeconds.value = String(normalizeHeroSmsCodeDelaySeconds(message.payload.heroSmsCodeDelaySeconds));
+      }
+      if (message.payload.heroSmsBalance !== undefined && displayHeroSmsBalance) {
+        displayHeroSmsBalance.textContent = formatHeroSmsBalanceValue(message.payload.heroSmsBalance);
+        displayHeroSmsBalance.classList.toggle('has-value', Number.isFinite(Number(message.payload.heroSmsBalance)));
       }
       if (
         (message.payload.heroSmsCountryId !== undefined || message.payload.heroSmsCountryLabel !== undefined)

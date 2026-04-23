@@ -31,3 +31,17 @@ test('sidepanel refreshes HeroSMS country options after max price blur and persi
   assert.match(backgroundSource, /heroSmsMaxPrice: null/);
   assert.match(backgroundSource, /case 'heroSmsMaxPrice':/);
 });
+
+test('sidepanel exposes HeroSMS balance query and code delay controls', () => {
+  const sidepanelSource = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+  const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
+  const backgroundSource = fs.readFileSync('background.js', 'utf8');
+
+  assert.match(html, /id="btn-query-hero-sms-balance"/);
+  assert.match(html, /id="display-hero-sms-balance"/);
+  assert.match(html, /id="input-hero-sms-code-delay-seconds"/);
+  assert.match(sidepanelSource, /type: 'QUERY_HERO_SMS_BALANCE'/);
+  assert.match(sidepanelSource, /heroSmsCodeDelaySeconds: normalizeHeroSmsCodeDelaySeconds/);
+  assert.match(backgroundSource, /heroSmsCodeDelaySeconds: 0/);
+  assert.match(backgroundSource, /heroSmsBalance: null/);
+});

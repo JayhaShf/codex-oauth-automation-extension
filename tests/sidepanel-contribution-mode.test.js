@@ -162,6 +162,7 @@ const inputAutoStepDelaySeconds = { value: '10' };
 const inputVerificationResendCount = { value: '6' };
 const inputHeroSmsApiKey = { value: 'hero-key' };
 const inputHeroSmsMaxPrice = { value: '0.25' };
+const inputHeroSmsCodeDelaySeconds = { value: '12' };
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
 const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
@@ -184,6 +185,7 @@ function normalizeAutoDelayMinutes(value) { return Number(value) || 30; }
 function normalizeAutoStepDelaySeconds(value) { return value === '' ? null : Number(value); }
 function normalizeVerificationResendCount(value, fallback) { return Number.isFinite(Number(value)) ? Number(value) : fallback; }
 function normalizeHeroSmsMaxPrice(value) { const numeric = Number(value); return Number.isFinite(numeric) && numeric >= 0 ? numeric : null; }
+function normalizeHeroSmsCodeDelaySeconds(value) { const numeric = Number(value); return Number.isFinite(numeric) ? Math.max(0, Math.min(300, Math.floor(numeric))) : 0; }
 function getSelectedHeroSmsCountryOption() { return { id: DEFAULT_HERO_SMS_COUNTRY_ID, label: DEFAULT_HERO_SMS_COUNTRY_LABEL }; }
 ${bundle}
 return {
