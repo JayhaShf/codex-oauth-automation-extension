@@ -4,6 +4,7 @@
   function createPhoneVerificationHelpers(deps = {}) {
     const {
       addLog,
+      broadcastDataUpdate = () => {},
       ensureStep8SignupPageReady,
       fetchImpl = (...args) => fetch(...args),
       getOAuthFlowStepTimeoutMs,
@@ -48,6 +49,11 @@
 
     function normalizeUseCount(value) {
       return Math.max(0, Math.floor(Number(value) || 0));
+    }
+
+    function normalizeMaxPrice(value) {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
     }
 
     function resolveCountryConfig(state = {}) {
@@ -116,6 +122,152 @@
         }
       }
       return trimmed;
+    }
+
+    function extractHeroSmsCountryPrices(payload) {
+      const countryPrices = new Map();
+
+      function addCountryPrice(countryValue, priceValue) {
+        const normalizedId = Math.max(1, Math.floor(Number(countryValue) || 0));
+        const numericPrice = Number(priceValue);
+        if (!(normalizedId > 0) || !Number.isFinite(numericPrice) || numericPrice < 0) {
+          return;
+        }
+        const previousPrice = countryPrices.get(normalizedId);
+        if (previousPrice === undefined || numericPrice < previousPrice) {
+          countryPrices.set(normalizedId, numericPrice);
+        }
+      }
+
+      function walk(value, path = []) {
+        if (!value || typeof value !== 'object') {
+          return;
+        }
+
+        if (Array.isArray(value)) {
+          value.forEach((item) => walk(item, path));
+          return;
+        }
+
+        const pathSet = new Set(path.map((segment) => String(segment || '').toLowerCase()));
+        const directCountryId = value.country ?? value.countryId ?? value.country_id ?? value.id;
+        const directPrice = value.cost ?? value.price;
+        if (directPrice !== undefined && directCountryId !== undefined) {
+          addCountryPrice(directCountryId, directPrice);
+        }
+
+        Object.entries(value).forEach(([key, nestedValue]) => {
+          const lowerKey = String(key || '').toLowerCase();
+          const nextPath = path.concat(key);
+
+          if (path.length === 0 && /^\d+$/.test(lowerKey) && nestedValue && typeof nestedValue === 'object') {
+            addCountryPrice(lowerKey, nestedValue.cost ?? nestedValue.price);
+          }
+
+          if (pathSet.has('countries') || pathSet.has('country') || pathSet.has('value')) {
+            if (/^\d+$/.test(lowerKey) && nestedValue && typeof nestedValue === 'object') {
+              addCountryPrice(lowerKey, nestedValue.cost ?? nestedValue.price);
+            }
+          }
+
+          if ((lowerKey === 'countries' || lowerKey === 'country') && nestedValue && typeof nestedValue === 'object') {
+            Object.entries(nestedValue).forEach(([countryKey, countryValue]) => {
+              if (/^\d+$/.test(String(countryKey || '').trim()) && countryValue && typeof countryValue === 'object') {
+                addCountryPrice(countryKey, countryValue.cost ?? countryValue.price);
+              }
+            });
+          }
+
+          walk(nestedValue, nextPath);
+        });
+      }
+
+      walk(payload);
+      return countryPrices;
+    }
+
+    function extractHeroSmsCountryLabels(payload) {
+      const entries = Array.isArray(payload?.value) ? payload.value : (Array.isArray(payload) ? payload : []);
+      return new Map(
+        entries
+          .filter((item) => Number(item?.id) > 0 && String(item?.eng || '').trim())
+          .map((item) => [Math.max(1, Math.floor(Number(item.id) || 0)), String(item.eng || '').trim()])
+      );
+    }
+
+    function resolveHeroSmsCountryRegion(label = '') {
+      const normalizedLabel = String(label || '').trim().toLowerCase();
+      if (!normalizedLabel) {
+        return '';
+      }
+
+      if ([
+        'united kingdom', 'ireland', 'germany', 'france', 'netherlands', 'spain', 'italy', 'poland',
+        'romania', 'sweden', 'austria', 'belgium', 'portugal', 'czech', 'croatia', 'lithuania',
+        'latvia', 'estonia', 'slovakia', 'slovenia', 'hungary', 'bulgaria', 'switzerland',
+        'denmark', 'norway', 'finland', 'greece', 'cyprus', 'luxembourg', 'malta', 'gibraltar',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'europe';
+      }
+
+      if ([
+        'thailand', 'vietnam', 'indonesia', 'malaysia', 'philippines', 'myanmar', 'china', 'hong kong',
+        'macao', 'india', 'cambodia', 'laos', 'taiwan', 'japan', 'singapore', 'pakistan', 'bangladesh',
+        'sri lanka', 'nepal', 'mongolia', 'south korea', 'north korea',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'asia';
+      }
+
+      if ([
+        'usa', 'canada', 'mexico', 'jamaica', 'puerto rico', 'trinidad and tobago', 'costa rica', 'guatemala',
+        'panama', 'cuba', 'barbados', 'bahamas', 'belize', 'dominican republic', 'dominica', 'grenada',
+        'saint kitts and nevis', 'saint lucia', 'saint vincent and the grenadines', 'antigua and barbuda',
+        'cayman islands', 'montserrat', 'anguilla', 'honduras', 'nicaragua', 'salvador',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'north-america';
+      }
+
+      if ([
+        'brazil', 'argentina', 'colombia', 'peru', 'venezuela', 'chile', 'uruguay', 'paraguay', 'ecuador',
+        'bolivia', 'guyana', 'suriname', 'french guiana',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'south-america';
+      }
+
+      if ([
+        'nigeria', 'kenya', 'tanzania', 'south africa', 'morocco', 'ghana', 'cameroon', 'chad', 'uganda',
+        'egypt', 'algeria', 'senegal', 'guinea', 'mali', 'ethiopia', 'angola', 'mozambique', 'zimbabwe',
+        'sudan', 'togo', 'mauritania', 'sierra leone', 'burundi', 'benin', 'botswana',
+        'central african republic', 'guinea-bissau', 'comoros', 'liberia', 'lesotho', 'malawi',
+        'namibia', 'niger', 'rwanda', 'reunion', 'zambia', 'somalia', 'gabon', 'mauritius',
+        'djibouti', 'equatorial guinea', 'eritrea', 'south sudan', 'sao tome and principe', 'cape verde',
+        'swaziland', 'ivory coast', 'gambia', 'madagascar', 'dr congo', 'congo', 'burkina faso',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'africa';
+      }
+
+      if ([
+        'saudi arabia', 'israel', 'iraq', 'iran', 'turkey', 'uae', 'kuwait', 'oman', 'qatar', 'syria',
+        'jordan', 'bahrain', 'palestine', 'lebanon', 'yemen', 'afghanistan',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'middle-east';
+      }
+
+      if ([
+        'australia', 'new zealand', 'papua', 'fiji', 'samoa', 'tonga', 'solomon islands', 'new caledonia', 'niue',
+      ].some((name) => normalizedLabel.includes(name))) {
+        return 'oceania';
+      }
+
+      return '';
+    }
+
+    function isHeroSmsNoNumbersPayload(payload) {
+      return /NO_NUMBERS/i.test(describeHeroSmsPayload(payload));
+    }
+
+    function isHeroSmsNoNumbersError(error) {
+      return /NO_NUMBERS/i.test(String(error?.message || ''));
     }
 
     function buildHeroSmsUrl(baseUrl, query = {}) {
@@ -208,6 +360,58 @@
       };
     }
 
+    async function fetchHeroSmsCountryPrices(config) {
+      const payload = await fetchHeroSmsPayload(config, {
+        action: 'getPrices',
+        service: HERO_SMS_SERVICE_CODE,
+      }, 'HeroSMS getPrices');
+      return extractHeroSmsCountryPrices(payload);
+    }
+
+    async function fetchHeroSmsCountryLabels(config) {
+      const payload = await fetchHeroSmsPayload(config, {
+        action: 'getCountries',
+      }, 'HeroSMS getCountries');
+      return extractHeroSmsCountryLabels(payload);
+    }
+
+    async function persistSelectedCountry(countryConfig) {
+      const payload = {
+        heroSmsCountryId: countryConfig.id,
+        heroSmsCountryLabel: countryConfig.label,
+      };
+      await setState(payload);
+      broadcastDataUpdate(payload);
+    }
+
+    async function pickAlternativeCountry(state = {}, excludedCountryIds = []) {
+      const config = resolvePhoneConfig(state);
+      const maxPrice = normalizeMaxPrice(state.heroSmsMaxPrice);
+      const excluded = new Set(excludedCountryIds.map((value) => Math.max(1, Math.floor(Number(value) || 0))));
+      const [countryPrices, countryLabels] = await Promise.all([
+        fetchHeroSmsCountryPrices(config),
+        fetchHeroSmsCountryLabels(config).catch(() => new Map()),
+      ]);
+      const currentRegion = resolveHeroSmsCountryRegion(state.heroSmsCountryLabel);
+
+      return Array.from(countryPrices.entries())
+        .filter(([countryId, price]) => !excluded.has(countryId) && (maxPrice === null || price <= maxPrice))
+        .map(([countryId, price]) => ({
+          id: countryId,
+          label: countryLabels.get(countryId) || `Country ${countryId}`,
+          price,
+          region: resolveHeroSmsCountryRegion(countryLabels.get(countryId) || `Country ${countryId}`),
+        }))
+        .sort((left, right) => {
+          const sameRegionLeft = currentRegion && left.region === currentRegion ? 1 : 0;
+          const sameRegionRight = currentRegion && right.region === currentRegion ? 1 : 0;
+          if (sameRegionLeft !== sameRegionRight) {
+            return sameRegionRight - sameRegionLeft;
+          }
+          return left.price - right.price || left.id - right.id;
+        })[0] || null;
+    }
+
     function parseActivationPayload(payload, fallback = null) {
       const normalizedFallback = normalizeActivation(fallback);
       const directActivation = normalizeActivation(payload);
@@ -240,9 +444,8 @@
       return null;
     }
 
-    async function requestPhoneActivation(state = {}) {
+    async function requestPhoneActivationForCountry(state = {}, countryConfig = resolveCountryConfig(state)) {
       const config = resolvePhoneConfig(state);
-      const countryConfig = resolveCountryConfig(state);
       const payload = await fetchHeroSmsPayload(config, {
         action: 'getNumber',
         service: HERO_SMS_SERVICE_CODE,
@@ -260,6 +463,40 @@
       }
 
       return activation;
+    }
+
+    async function requestPhoneActivation(state = {}) {
+      let currentState = { ...state };
+      let countryConfig = resolveCountryConfig(currentState);
+      const attemptedCountryIds = new Set();
+
+      while (true) {
+        attemptedCountryIds.add(countryConfig.id);
+        try {
+          return await requestPhoneActivationForCountry(currentState, countryConfig);
+        } catch (error) {
+          if (!isHeroSmsNoNumbersError(error)) {
+            throw error;
+          }
+
+          const nextCountry = await pickAlternativeCountry(currentState, Array.from(attemptedCountryIds));
+          if (!nextCountry) {
+            throw error;
+          }
+
+          await addLog(
+            `Step 9: ${countryConfig.label} -> ${nextCountry.label}，自动切换购买，当前价格 $${nextCountry.price.toFixed(4)}。`,
+            'warn'
+          );
+          await persistSelectedCountry(nextCountry);
+          currentState = {
+            ...currentState,
+            heroSmsCountryId: nextCountry.id,
+            heroSmsCountryLabel: nextCountry.label,
+          };
+          countryConfig = nextCountry;
+        }
+      }
     }
 
     async function reactivatePhoneActivation(state = {}, activation) {

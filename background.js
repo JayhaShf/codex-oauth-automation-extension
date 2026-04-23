@@ -6245,6 +6245,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
 });
 const phoneVerificationHelpers = self.MultiPageBackgroundPhoneVerification?.createPhoneVerificationHelpers({
   addLog,
+  broadcastDataUpdate,
   DEFAULT_HERO_SMS_BASE_URL,
   ensureStep8SignupPageReady,
   getOAuthFlowStepTimeoutMs,

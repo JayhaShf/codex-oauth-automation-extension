@@ -263,6 +263,213 @@ test('phone verification helper reports the configured HeroSMS country when numb
   );
 });
 
+test('phone verification helper automatically switches to another available HeroSMS country when the selected country has no number pool', async () => {
+  const requests = [];
+  const submittedPayloads = [];
+  const broadcasts = [];
+  const logs = [];
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsCountryId: 16,
+    heroSmsCountryLabel: 'United Kingdom',
+    heroSmsMaxPrice: 0.2,
+    verificationResendCount: 0,
+    currentPhoneActivation: null,
+    reusablePhoneActivation: null,
+  };
+
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
+    broadcastDataUpdate: (payload) => {
+      broadcasts.push(payload);
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      const country = parsedUrl.searchParams.get('country');
+      if (action === 'getNumber' && country === '16') {
+        return {
+          ok: true,
+          text: async () => 'NO_NUMBERS',
+        };
+      }
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            52: { cost: '0.10' },
+            43: { cost: '0.30' },
+          }),
+        };
+      }
+      if (action === 'getCountries') {
+        return {
+          ok: true,
+          text: async () => JSON.stringify([
+            { id: 16, eng: 'United Kingdom', visible: 1 },
+            { id: 52, eng: 'Thailand', visible: 1 },
+            { id: 43, eng: 'Germany', visible: 1 },
+          ]),
+        };
+      }
+      if (action === 'getNumber' && country === '52') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_NUMBER:654321:66959916439',
+        };
+      }
+      if (action === 'getStatus') {
+        return {
+          ok: true,
+          text: async () => 'STATUS_OK:112233',
+        };
+      }
+      if (action === 'setStatus') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_ACTIVATION',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}:${country || ''}`);
+    },
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => defaultTimeoutMs,
+    getState: async () => ({ ...currentState }),
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'SUBMIT_PHONE_NUMBER') {
+        submittedPayloads.push(message.payload);
+        return {
+          phoneVerificationPage: true,
+          url: 'https://auth.openai.com/phone-verification',
+        };
+      }
+      if (message.type === 'SUBMIT_PHONE_VERIFICATION_CODE') {
+        return {
+          success: true,
+          consentReady: true,
+          url: 'https://auth.openai.com/authorize',
+        };
+      }
+      throw new Error(`Unexpected content-script message: ${message.type}`);
+    },
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const result = await helpers.completePhoneVerificationFlow(1, {
+    addPhonePage: true,
+    phoneVerificationPage: false,
+    url: 'https://auth.openai.com/add-phone',
+  });
+
+  assert.deepStrictEqual(result, {
+    success: true,
+    consentReady: true,
+    url: 'https://auth.openai.com/authorize',
+  });
+  assert.deepStrictEqual(submittedPayloads, [{
+    phoneNumber: '66959916439',
+    countryId: 52,
+    countryLabel: 'Thailand',
+  }]);
+  assert.ok(
+    logs.some((entry) => /United Kingdom -> Thailand/.test(entry.message) && /\$0\.1000/.test(entry.message)),
+    'should log original country, new country, and selected price'
+  );
+  assert.deepStrictEqual(broadcasts, [{
+    heroSmsCountryId: 52,
+    heroSmsCountryLabel: 'Thailand',
+  }]);
+  assert.equal(currentState.heroSmsCountryId, 52);
+  assert.equal(currentState.heroSmsCountryLabel, 'Thailand');
+  assert.deepStrictEqual(
+    requests.filter((url) => url.searchParams.get('action') === 'getNumber').map((url) => url.searchParams.get('country')),
+    ['16', '52']
+  );
+});
+
+test('phone verification helper prefers same-region countries before lower-priced countries in other regions', async () => {
+  let currentState = {
+    heroSmsApiKey: 'demo-key',
+    heroSmsCountryId: 16,
+    heroSmsCountryLabel: 'United Kingdom',
+    heroSmsMaxPrice: 0.2,
+    verificationResendCount: 0,
+    currentPhoneActivation: null,
+    reusablePhoneActivation: null,
+  };
+
+  const requests = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    broadcastDataUpdate: () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      const country = parsedUrl.searchParams.get('country');
+      if (action === 'getNumber' && country === '16') {
+        return {
+          ok: true,
+          text: async () => 'NO_NUMBERS',
+        };
+      }
+      if (action === 'getPrices') {
+        return {
+          ok: true,
+          text: async () => JSON.stringify({
+            23: { cost: '0.12' },
+            52: { cost: '0.10' },
+            43: { cost: '0.11' },
+          }),
+        };
+      }
+      if (action === 'getCountries') {
+        return {
+          ok: true,
+          text: async () => JSON.stringify([
+            { id: 16, eng: 'United Kingdom', visible: 1 },
+            { id: 23, eng: 'Ireland', visible: 1 },
+            { id: 43, eng: 'Germany', visible: 1 },
+            { id: 52, eng: 'Thailand', visible: 1 },
+          ]),
+        };
+      }
+      if (action === 'getNumber' && country === '43') {
+        return {
+          ok: true,
+          text: async () => 'ACCESS_NUMBER:777777:4915112345678',
+        };
+      }
+      throw new Error(`Unexpected HeroSMS action: ${action}:${country || ''}`);
+    },
+    getState: async () => ({ ...currentState }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await helpers.requestPhoneActivation(currentState);
+
+  assert.equal(activation.phoneNumber, '4915112345678');
+  assert.equal(currentState.heroSmsCountryId, 43);
+  assert.equal(currentState.heroSmsCountryLabel, 'Germany');
+  assert.deepStrictEqual(
+    requests.filter((url) => url.searchParams.get('action') === 'getNumber').map((url) => url.searchParams.get('country')),
+    ['16', '43']
+  );
+});
+
 test('phone verification helper throws a step-7 restart error after 60 seconds plus one resend window without SMS', async () => {
   const requests = [];
   const messages = [];

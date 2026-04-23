@@ -1662,6 +1662,10 @@ function collectHeroSmsCountryPrices(payload) {
       const lowerKey = String(key || '').toLowerCase();
       const nextPath = path.concat(key);
 
+      if (path.length === 0 && /^\d+$/.test(lowerKey) && nestedValue && typeof nestedValue === 'object') {
+        addCountryPrice(lowerKey, nestedValue.cost ?? nestedValue.price);
+      }
+
       if (pathSet.has('countries') || pathSet.has('country') || pathSet.has('value')) {
         if (/^\d+$/.test(lowerKey) && nestedValue && typeof nestedValue === 'object') {
           addCountryPrice(lowerKey, nestedValue.cost ?? nestedValue.price);
