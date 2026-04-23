@@ -234,6 +234,35 @@ test('phone verification helper uses the configured HeroSMS country for both num
   }]);
 });
 
+test('phone verification helper reports the configured HeroSMS country when number acquisition fails', async () => {
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async () => ({
+      ok: true,
+      text: async () => 'NO_NUMBERS',
+    }),
+    getState: async () => ({
+      heroSmsApiKey: 'demo-key',
+      heroSmsCountryId: 16,
+      heroSmsCountryLabel: 'United Kingdom',
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    helpers.requestPhoneActivation({
+      heroSmsApiKey: 'demo-key',
+      heroSmsCountryId: 16,
+      heroSmsCountryLabel: 'United Kingdom',
+    }),
+    /HeroSMS getNumber failed for United Kingdom \(16\): NO_NUMBERS/
+  );
+});
+
 test('phone verification helper throws a step-7 restart error after 60 seconds plus one resend window without SMS', async () => {
   const requests = [];
   const messages = [];

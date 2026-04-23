@@ -254,7 +254,9 @@
       });
       if (!activation) {
         const text = describeHeroSmsPayload(payload);
-        throw new Error(`HeroSMS getNumber failed: ${text || 'empty response'}`);
+        throw new Error(
+          `HeroSMS getNumber failed for ${countryConfig.label} (${countryConfig.id}): ${text || 'empty response'}`
+        );
       }
 
       return activation;

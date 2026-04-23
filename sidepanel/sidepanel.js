@@ -210,6 +210,7 @@ const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay
 const inputVerificationResendCount = document.getElementById('input-verification-resend-count');
 const rowAccountRunHistoryTextEnabled = document.getElementById('row-account-run-history-text-enabled');
 const inputHeroSmsApiKey = document.getElementById('input-hero-sms-api-key');
+const inputHeroSmsMaxPrice = document.getElementById('input-hero-sms-max-price');
 const selectHeroSmsCountry = document.getElementById('select-hero-sms-country');
 const displayHeroSmsPlatform = document.getElementById('display-hero-sms-platform');
 const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
@@ -265,6 +266,8 @@ const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = 'http://127.0.0.1:17373';
 const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
 const DEFAULT_HERO_SMS_COUNTRY_ID = 52;
 const DEFAULT_HERO_SMS_COUNTRY_LABEL = 'Thailand';
+const HERO_SMS_SERVICE_CODE = 'dr';
+let heroSmsCountriesLoadToken = 0;
 
 function getManagedAliasUtils() {
   return window.MultiPageManagedAliasUtils || null;
@@ -1478,6 +1481,7 @@ function collectSettingsPayload() {
   const heroSmsApiKeyValue = typeof inputHeroSmsApiKey !== 'undefined' && inputHeroSmsApiKey
     ? (inputHeroSmsApiKey.value || '')
     : '';
+  const heroSmsMaxPriceValue = normalizeHeroSmsMaxPrice(inputHeroSmsMaxPrice?.value);
   const heroSmsCountry = typeof getSelectedHeroSmsCountryOption === 'function'
     ? getSelectedHeroSmsCountryOption()
     : {
@@ -1535,6 +1539,7 @@ function collectSettingsPayload() {
       DEFAULT_VERIFICATION_RESEND_COUNT
     ),
     heroSmsApiKey: heroSmsApiKeyValue,
+    heroSmsMaxPrice: heroSmsMaxPriceValue,
     heroSmsCountryId: heroSmsCountry.id,
     heroSmsCountryLabel: heroSmsCountry.label,
   };
@@ -1593,6 +1598,112 @@ function normalizeHeroSmsCountryLabel(value = '') {
   return String(value || '').trim() || DEFAULT_HERO_SMS_COUNTRY_LABEL;
 }
 
+function normalizeHeroSmsApiKey(value = '') {
+  return String(value || '').trim();
+}
+
+function normalizeHeroSmsMaxPrice(value) {
+  const trimmed = String(value ?? '').trim();
+  if (!trimmed) {
+    return null;
+  }
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+}
+
+function parseHeroSmsPayload(text = '') {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) {
+    return '';
+  }
+  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+function collectHeroSmsCountryPrices(payload) {
+  const countryPrices = new Map();
+
+  function addCountryPrice(countryValue, priceValue) {
+    const normalizedId = normalizeHeroSmsCountryId(countryValue);
+    const numericPrice = Number(priceValue);
+    if (!(normalizedId > 0) || !Number.isFinite(numericPrice) || numericPrice < 0) {
+      return;
+    }
+    const previousPrice = countryPrices.get(normalizedId);
+    if (previousPrice === undefined || numericPrice < previousPrice) {
+      countryPrices.set(normalizedId, numericPrice);
+    }
+  }
+
+  function walk(value, path = []) {
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+
+    if (Array.isArray(value)) {
+      value.forEach((item) => walk(item, path));
+      return;
+    }
+
+    const pathSet = new Set(path.map((segment) => String(segment || '').toLowerCase()));
+    const directCountryId = value.country ?? value.countryId ?? value.country_id ?? value.id;
+    const directPrice = value.cost ?? value.price;
+    if (directPrice !== undefined && directCountryId !== undefined) {
+      addCountryPrice(directCountryId, directPrice);
+    }
+
+    Object.entries(value).forEach(([key, nestedValue]) => {
+      const lowerKey = String(key || '').toLowerCase();
+      const nextPath = path.concat(key);
+
+      if (pathSet.has('countries') || pathSet.has('country') || pathSet.has('value')) {
+        if (/^\d+$/.test(lowerKey) && nestedValue && typeof nestedValue === 'object') {
+          addCountryPrice(lowerKey, nestedValue.cost ?? nestedValue.price);
+        }
+      }
+
+      if ((lowerKey === 'countries' || lowerKey === 'country') && nestedValue && typeof nestedValue === 'object') {
+        Object.entries(nestedValue).forEach(([countryKey, countryValue]) => {
+          if (/^\d+$/.test(String(countryKey || '').trim()) && countryValue && typeof countryValue === 'object') {
+            addCountryPrice(countryKey, countryValue.cost ?? countryValue.price);
+          }
+        });
+      }
+
+      walk(nestedValue, nextPath);
+    });
+  }
+
+  walk(payload);
+  return countryPrices;
+}
+
+async function fetchHeroSmsCountryPrices(apiKey) {
+  const normalizedApiKey = normalizeHeroSmsApiKey(apiKey);
+  if (!normalizedApiKey) {
+    return null;
+  }
+
+  const url = new URL('https://hero-sms.com/stubs/handler_api.php');
+  url.searchParams.set('action', 'getPrices');
+  url.searchParams.set('service', HERO_SMS_SERVICE_CODE);
+  url.searchParams.set('api_key', normalizedApiKey);
+
+  const response = await fetch(url.toString());
+  const payload = parseHeroSmsPayload(await response.text());
+  if (!response.ok) {
+    throw new Error(typeof payload === 'string' && payload ? payload : `HTTP ${response.status}`);
+  }
+
+  return collectHeroSmsCountryPrices(payload);
+}
+
 function getSelectedHeroSmsCountryOption() {
   if (!selectHeroSmsCountry) {
     return {
@@ -1621,6 +1732,8 @@ async function loadHeroSmsCountries() {
     return;
   }
 
+  const loadToken = heroSmsCountriesLoadToken + 1;
+  heroSmsCountriesLoadToken = loadToken;
   const previousValue = selectHeroSmsCountry.value || String(DEFAULT_HERO_SMS_COUNTRY_ID);
   try {
     const response = await fetch('https://hero-sms.com/stubs/handler_api.php?action=getCountries');
@@ -1630,8 +1743,33 @@ async function loadHeroSmsCountries() {
       throw new Error('empty country list');
     }
 
+    let countryPrices = null;
+    const heroSmsApiKey = normalizeHeroSmsApiKey(inputHeroSmsApiKey?.value);
+    const heroSmsMaxPrice = normalizeHeroSmsMaxPrice(inputHeroSmsMaxPrice?.value);
+    if (heroSmsApiKey) {
+      try {
+        countryPrices = await fetchHeroSmsCountryPrices(heroSmsApiKey);
+      } catch (error) {
+        console.warn('Failed to load HeroSMS available countries for current API key:', error);
+      }
+    }
+
     const optionsHtml = countries
+      .filter((item) => Number(item?.visible) !== 0)
       .filter((item) => Number(item?.id) > 0 && String(item?.eng || '').trim())
+      .filter((item) => {
+        if (!countryPrices || countryPrices.size === 0) {
+          return true;
+        }
+        const price = countryPrices.get(normalizeHeroSmsCountryId(item.id));
+        if (!Number.isFinite(price)) {
+          return false;
+        }
+        if (heroSmsMaxPrice === null) {
+          return true;
+        }
+        return price <= heroSmsMaxPrice;
+      })
       .sort((left, right) => String(left.eng || '').localeCompare(String(right.eng || '')))
       .map((item) => {
         const id = normalizeHeroSmsCountryId(item.id);
@@ -1640,8 +1778,14 @@ async function loadHeroSmsCountries() {
       })
       .join('');
 
+    if (loadToken !== heroSmsCountriesLoadToken) {
+      return;
+    }
+
     if (optionsHtml) {
       selectHeroSmsCountry.innerHTML = optionsHtml;
+    } else {
+      throw new Error('empty filtered country list');
     }
   } catch (error) {
     console.warn('Failed to load HeroSMS countries:', error);
@@ -2022,6 +2166,11 @@ function applySettingsState(state) {
   }
   if (inputHeroSmsApiKey) {
     inputHeroSmsApiKey.value = state?.heroSmsApiKey || '';
+  }
+  if (inputHeroSmsMaxPrice) {
+    inputHeroSmsMaxPrice.value = state?.heroSmsMaxPrice !== undefined && state?.heroSmsMaxPrice !== null
+      ? String(normalizeHeroSmsMaxPrice(state.heroSmsMaxPrice) ?? '')
+      : '';
   }
   if (selectHeroSmsCountry) {
     const restoredCountryId = String(normalizeHeroSmsCountryId(state?.heroSmsCountryId));
@@ -4558,6 +4707,18 @@ inputHeroSmsApiKey?.addEventListener('input', () => {
   scheduleSettingsAutoSave();
 });
 inputHeroSmsApiKey?.addEventListener('blur', () => {
+  loadHeroSmsCountries().catch(() => { });
+  saveSettings({ silent: true }).catch(() => { });
+});
+
+inputHeroSmsMaxPrice?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputHeroSmsMaxPrice?.addEventListener('blur', () => {
+  const normalizedMaxPrice = normalizeHeroSmsMaxPrice(inputHeroSmsMaxPrice.value);
+  inputHeroSmsMaxPrice.value = normalizedMaxPrice !== null ? String(normalizedMaxPrice) : '';
+  loadHeroSmsCountries().catch(() => { });
   saveSettings({ silent: true }).catch(() => { });
 });
 
@@ -4810,6 +4971,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.heroSmsApiKey !== undefined && inputHeroSmsApiKey) {
         inputHeroSmsApiKey.value = message.payload.heroSmsApiKey || '';
+      }
+      if (message.payload.heroSmsMaxPrice !== undefined && inputHeroSmsMaxPrice) {
+        inputHeroSmsMaxPrice.value = message.payload.heroSmsMaxPrice !== null ? String(message.payload.heroSmsMaxPrice) : '';
       }
       if (
         (message.payload.heroSmsCountryId !== undefined || message.payload.heroSmsCountryLabel !== undefined)
