@@ -45,3 +45,13 @@ test('sidepanel exposes HeroSMS balance query and code delay controls', () => {
   assert.match(backgroundSource, /heroSmsCodeDelaySeconds: 0/);
   assert.match(backgroundSource, /heroSmsBalance: null/);
 });
+
+test('sidepanel includes an Auto HeroSMS country option and persists auto mode', () => {
+  const sidepanelSource = fs.readFileSync('sidepanel/sidepanel.js', 'utf8');
+  const backgroundSource = fs.readFileSync('background.js', 'utf8');
+
+  assert.match(sidepanelSource, /value=\"auto\">Auto/);
+  assert.match(sidepanelSource, /heroSmsCountryAuto: Boolean\(heroSmsCountry\.auto\)/);
+  assert.match(backgroundSource, /heroSmsCountryAuto: false/);
+  assert.match(backgroundSource, /case 'heroSmsCountryAuto':/);
+});

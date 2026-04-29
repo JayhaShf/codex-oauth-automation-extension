@@ -455,7 +455,9 @@
       const currentCountryId = Math.max(1, Math.floor(Number(state.heroSmsCountryId) || 0));
       const currentRegion = resolveHeroSmsCountryRegion(state.heroSmsCountryLabel);
       const filteredCandidates = candidates.filter((candidate) => !excluded.has(candidate.id));
-      const currentCandidate = filteredCandidates.find((candidate) => candidate.id === currentCountryId);
+      const currentCandidate = state.heroSmsCountryAuto
+        ? null
+        : filteredCandidates.find((candidate) => candidate.id === currentCountryId);
       if (currentCandidate) {
         return currentCandidate;
       }

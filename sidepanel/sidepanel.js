@@ -1544,6 +1544,7 @@ function collectSettingsPayload() {
     heroSmsApiKey: heroSmsApiKeyValue,
     heroSmsMaxPrice: heroSmsMaxPriceValue,
     heroSmsCodeDelaySeconds: normalizeHeroSmsCodeDelaySeconds(inputHeroSmsCodeDelaySeconds?.value),
+    heroSmsCountryAuto: Boolean(heroSmsCountry.auto),
     heroSmsCountryId: heroSmsCountry.id,
     heroSmsCountryLabel: heroSmsCountry.label,
   };
@@ -1776,7 +1777,7 @@ async function loadHeroSmsCountries() {
       }
     }
 
-    const optionsHtml = countries
+    const optionsHtml = ['<option value="auto">Auto</option>'].concat(countries
       .filter((item) => Number(item?.visible) !== 0)
       .filter((item) => Number(item?.id) > 0 && String(item?.eng || '').trim())
       .filter((item) => {
@@ -1797,7 +1798,7 @@ async function loadHeroSmsCountries() {
         const id = normalizeHeroSmsCountryId(item.id);
         const label = String(item.eng || '').trim();
         return `<option value="${id}">${label}</option>`;
-      })
+      }))
       .join('');
 
     if (loadToken !== heroSmsCountriesLoadToken) {
@@ -1811,12 +1812,12 @@ async function loadHeroSmsCountries() {
     }
   } catch (error) {
     console.warn('Failed to load HeroSMS countries:', error);
-    selectHeroSmsCountry.innerHTML = `<option value="${DEFAULT_HERO_SMS_COUNTRY_ID}">${DEFAULT_HERO_SMS_COUNTRY_LABEL}</option>`;
+    selectHeroSmsCountry.innerHTML = `<option value="auto">Auto</option><option value="${DEFAULT_HERO_SMS_COUNTRY_ID}">${DEFAULT_HERO_SMS_COUNTRY_LABEL}</option>`;
   }
 
   selectHeroSmsCountry.value = Array.from(selectHeroSmsCountry.options).some((option) => option.value === previousValue)
     ? previousValue
-    : String(DEFAULT_HERO_SMS_COUNTRY_ID);
+    : 'auto';
   updateHeroSmsPlatformDisplay(getSelectedHeroSmsCountryOption().label);
 }
 
@@ -5042,6 +5043,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         displayHeroSmsBalance.textContent = formatHeroSmsBalanceValue(message.payload.heroSmsBalance);
         displayHeroSmsBalance.classList.toggle('has-value', Number.isFinite(Number(message.payload.heroSmsBalance)));
       }
+      if (message.payload.heroSmsCountryAuto !== undefined && selectHeroSmsCountry) {
+        if (message.payload.heroSmsCountryAuto) {
+          selectHeroSmsCountry.value = 'auto';
+        }
+      }
       if (
         (message.payload.heroSmsCountryId !== undefined || message.payload.heroSmsCountryLabel !== undefined)
         && selectHeroSmsCountry
@@ -5053,7 +5059,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               : selectHeroSmsCountry.value
           )
         );
-        if (Array.from(selectHeroSmsCountry.options).some((option) => option.value === nextCountryId)) {
+        if (!normalizeHeroSmsCountryAuto(latestState?.heroSmsCountryAuto) && Array.from(selectHeroSmsCountry.options).some((option) => option.value === nextCountryId)) {
           selectHeroSmsCountry.value = nextCountryId;
         }
         updateHeroSmsPlatformDisplay(message.payload.heroSmsCountryLabel || getSelectedHeroSmsCountryOption().label);

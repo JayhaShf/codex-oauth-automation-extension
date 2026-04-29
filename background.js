@@ -293,6 +293,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   heroSmsApiKey: '',
   heroSmsMaxPrice: null,
   heroSmsCodeDelaySeconds: 0,
+  heroSmsCountryAuto: false,
   heroSmsCountryId: HERO_SMS_COUNTRY_ID,
   heroSmsCountryLabel: HERO_SMS_COUNTRY_LABEL,
 };
@@ -959,6 +960,8 @@ function normalizePersistentSettingValue(key, value) {
         ? Math.max(0, Math.min(300, Math.floor(numeric)))
         : 0;
     }
+    case 'heroSmsCountryAuto':
+      return Boolean(value);
     case 'heroSmsCountryId':
       return Math.max(1, Math.floor(Number(value) || HERO_SMS_COUNTRY_ID));
     case 'heroSmsCountryLabel':
